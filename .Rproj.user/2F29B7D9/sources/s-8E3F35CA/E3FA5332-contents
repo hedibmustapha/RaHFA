@@ -1,0 +1,59 @@
+rm(list = ls())
+
+package.check(c("readxl","readr","dplyr","lubridate","stringr"))
+
+source("./code/small_functions.R")
+
+data<-readxl::read_excel("./input/data.xlsx") %>% readr::type_convert()
+
+logbook<-data.frame(
+  uuid= character(),
+  enumerator= character(),
+  district= character(),
+  question.name = character(),
+  old.value = character(),
+  new.value = character(),
+  probleme = character(),
+  checkid= character(),
+  action=character()
+)
+
+starttime = ymd_hms(data[["start"]])
+endtime = ymd_hms(data[["end"]])
+data$length_survey<-difftime(as.POSIXct(endtime),as.POSIXct(starttime),units = "mins")
+sm_nsp <- names(data)[grep(".[.](nsp|ne_sait_pas|je_ne_sais_pas)", names(data))]
+sm_autre <- names(data)[grep(".[.]autre", names(data))]
+
+data<-clean_headers(data) 
+data<-rec_missing_all(data)
+
+outliers<-check_outliers(data,"uuid","enum_name","district")
+
+index<-pulluuid(data,data$informed_consent=="non")
+logbook<- makeslog(data,logbook,"id001",index,"informed_consent","pas de consentement pour enquete",action = "remove")
+
+index<-pulluuid(data,data$length_survey<5)
+logbook<- makeslog(data,logbook,"id002",index,"length_survey","enquete plus courte que 5min",action = "remove")
+
+index<-pulluuid(data,data$length_survey>5 & data$length_survey<=20)
+logbook<- makeslog(data,logbook,"id003",index,"length_survey","enquete plus courte que 20min",action = "check")
+
+index<-pulluuid(data,data$length_survey>90)
+logbook<- makeslog(data,logbook,"id004",index,"length_survey","enquete plus longue que 90min",action = "check")
+
+data$occurrence_nsp <-apply(data,1,function(x) {grep("nsp|ne_sait_pas|je_ne_sais_pas",x) %>%  unlist %>% length}) +apply(data[sm_nsp],1,sum,na.rm=T)
+index<-pulluuid(data,data$occurrence_nsp>3)
+logbook<- makeslog(data,logbook,"id005",index, "occurrence_nsp", "Nombre important de reponses nsp par enqueteur", action = "check")
+
+data$occurrence_autre <-apply(data,1,function(x) {grep("autre",x) %>%  unlist %>% length}) + apply(data[sm_autre],1,sum,na.rm=T)
+index<-pulluuid(data,data$occurrence_autre>3)
+logbook<- makeslog(data,logbook,"id006",index, "occurrence_autre", "Nombre important de reponses Autre par enqueteur", action = "check")
+
+logbook<-bind_rows(outliers,logbook)
+
+# sensitive_vars<-c("enum_name","follow_contact_respondent","followup_name","followup_position","followup_phone",
+#                   "followup_date","enumerator_comments","whatsapp_location","_longitude","_latitude","_altitude","_precision")
+# data<-remove_headers(data,sensitive_vars)
+
+clean<- impl_clean(data,"uuid",logbook,"uuid","question.name","new.value","old.value","action")
+write.csv(clean,"./output/clean.csv",row.names=F)
